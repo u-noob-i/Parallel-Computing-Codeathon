@@ -1,0 +1,104 @@
+#include <iostream>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <chrono>
+
+using namespace std::chrono;
+
+__global__
+void rev2DGPU(int *a, int n) {
+  
+  int index = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+
+  for(int i = index; i < n * n; i += stride)
+  {
+    int x = ((i / n) * n) + n - 1 - (i % n);
+    if(i % n >= n / 2)
+      continue;
+    int temp = a[x];      
+    a[x] = a[i];
+    a[i] = temp;
+  }  
+}
+
+void rev2DCPU(int *a, int n)
+{
+  for(int i = 0; i < n; i++)
+  {
+    for(int j = 0; j < n / 2; j++)
+    {
+      int x = (i * n) + j, y = (i * n) + n - 1 - j;
+      int temp = a[x];      
+      a[x] = a[y];
+      a[y] = temp;
+    }
+  }
+  return;
+}
+
+bool validate(int *a, int *b, int n)
+{
+  bool ret = 1;
+  for(int i = 0; i < n; i++)
+    for(int j = 0; j < n; j++)
+      if(a[(i * n) + j] != b[(i * n) + j])
+        ret = 0;
+  return ret;
+}
+
+int main(const int argc, const char** argv) {
+
+  int n = 1000;
+  
+  int deviceId, numberOfSMs;
+  size_t threadsPerBlock, numberOfBlocks;
+    
+  cudaGetDevice(&deviceId);
+  cudaDeviceGetAttribute(&numberOfSMs, cudaDevAttrMultiProcessorCount, deviceId);
+  
+  threadsPerBlock = 256;
+  numberOfBlocks = 32 * numberOfSMs;
+
+  int bytes = n * sizeof(int);
+  int *a, *b;
+ 
+  cudaMallocManaged(&a, bytes * bytes);
+  cudaMallocManaged(&b, bytes * bytes);
+  
+  int *arr[n];
+  for (int i = 0; i < n; i++)
+  {
+    arr[i] = (int*)malloc(bytes);
+    for(int j = 0; j < n; j++)
+      arr[i][j] = (i * n) + j + 1;
+  }
+  
+  //Implementing 2D array using 1D array
+  for(int i = 0; i < n; i++)
+    for (int j = 0; j < n; j++)
+      a[(i * n) + j] = b[(i * n) + j] = arr[i][j];
+  
+  cudaMemPrefetchAsync(a, bytes * bytes, deviceId);
+  
+  rev2DGPU<<<numberOfBlocks, threadsPerBlock>>>(a, n);
+  cudaDeviceSynchronize();
+  
+  auto start = high_resolution_clock::now();
+  
+  rev2DCPU(b, n); 
+  
+  auto stop = high_resolution_clock::now();
+  auto t = duration_cast<nanoseconds>(stop - start);
+ 
+  std::cout << "Time taken by CPU: " << t.count() << " nanoseconds" << "\n";
+  
+  if(validate(a, b, n))
+    printf("Correct\n");
+  else 
+    printf("Wrong\n");
+
+  cudaFree(a);
+  cudaFree(b);
+}

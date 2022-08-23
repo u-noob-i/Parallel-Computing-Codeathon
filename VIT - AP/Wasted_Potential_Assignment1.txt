@@ -1,0 +1,101 @@
+#include <stdio.h>
+#include<cstdlib>
+
+void CPUInit(double num, double *a, int N)
+{
+  for(int i = 0; i < N; ++i)
+  {
+    a[i] = num+i;
+  }
+}
+
+void cpuPrefix(double *x,double *y,int n){
+  y[0]=x[0];
+  for(int i=1;i<n;++i){
+    y[i]=y[i-1]+x[i];
+  }
+}
+
+__global__ void GPUInit(double num, double *a, int n)
+{
+  int index = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+  for(int i = index; i < n; i += stride)
+  {
+    a[i]=num+i;
+  }
+}
+
+__global__ void gpuPrefix(double *x,double *y,int n){
+  int index = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+  for(int i = index; i < n; i += stride)
+  {
+    y[i]=0.0;
+    for(int j=0;j<=i;++j)
+      y[i]+=x[j];
+  }
+}
+
+void validate(double* b,double *y,int n){
+  for(int i=0;i<n;++i)
+    if(b[i]!=y[i]){
+        printf("Different results.");
+        return;
+    }
+  printf("Same results.");
+}
+
+int main()
+{
+  const int N = 100000;
+  size_t size = N * sizeof(double);
+
+  double *a;
+  double *b;
+  
+  double *x=(double*)malloc(size);
+  double *y=(double*)malloc(size);
+      
+  CPUInit(1.0,x,n);
+  
+  cpuPrefix(x,y,n);
+  
+  /*for(int i=0;i<n;i++)
+    printf("%3g",y[i]);*/
+
+  cudaMallocManaged(&a, size);
+  cudaMallocManaged(&b, size);
+
+  size_t threadsPerBlock;
+  size_t numberOfBlocks;
+
+  threadsPerBlock = 128;
+  numberOfBlocks = 128;
+  
+  GPUInit<<<numberOfBlocks,threadsPerBlock>>>(1.0, a, n);
+  cudaDeviceSynchronize();
+
+  cudaError_t addVectorsErr;
+  cudaError_t asyncErr;
+
+  gpuPrefix<<<numberOfBlocks, threadsPerBlock>>>(a, b, n);
+  cudaDeviceSynchronize();
+  
+  addVectorsErr = cudaGetLastError();
+  if(addVectorsErr != cudaSuccess) printf("Error: %s\n", cudaGetErrorString(addVectorsErr));
+
+  asyncErr = cudaDeviceSynchronize();
+  if(asyncErr != cudaSuccess) printf("Error: %s\n", cudaGetErrorString(asyncErr));
+  
+  /*for(int i=0;i<n;i++)
+    printf("%3g",b[i]);*/
+    
+  validate(b,y,n);
+
+  cudaFree(a);
+  cudaFree(b);
+  
+  free(x);
+  free(y);
+}

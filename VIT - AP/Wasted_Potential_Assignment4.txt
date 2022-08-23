@@ -1,0 +1,138 @@
+#include <algorithm>
+#include <iostream>
+#include <vector>
+#include <stdio.h>
+#include <chrono>
+#include <stdlib.h>
+#include <cstdlib>
+#include <time.h>
+
+using std::vector;
+using namespace std::chrono;
+
+__global__ 
+void sparsematrixvectormultiplier(int r, int *div, int *ind, double *val, double *x, double *y)
+{
+  int i = blockDim.x * blockIdx.x + threadIdx.x ;
+  int stride = blockDim.x * gridDim.x;
+
+  for(int row = i; row < r; row += stride){
+    double temp = 0;
+    int rs = div[row];
+    int re = div[row + 1];
+    for (int j = rs; j < re ;j++)
+      temp += val[j] * x[ind[j]];
+    y[row] += temp;
+  }
+}
+
+
+
+void serialmultiplier(vector<vector<double>> mat1, double *mat2, double *y) 
+{
+ 
+  for (int i = 0; i < 4096; i++) 
+  {
+    y[i] = 0;
+    for (int k = 0; k < 4096; k++) 
+    {
+      y[i] += mat1[i][k] * mat2[k];
+    }
+  }
+}
+
+bool validate(double *x, double *y)
+{
+  for (int i = 0; i < 4096; i++)
+    if(x[i] != y[i])
+      return 0;
+  return 1;
+}
+
+int main()
+{
+  
+  vector<vector<double>> A(4096, vector<double>(4096));
+  int n = 4096, m = 4096, i, j;
+  
+  srand(time(0));
+  
+  for(i = 0; i < n; i++)
+    for(j = 0; j < m; j++)
+      {
+        int t = rand()%2;
+        if(t==0)
+          A[i][j] = 0;
+        else
+          A[i][j] = rand()%100;
+      }
+
+  vector<int> div = {0};
+  vector<int> ind, val;
+  int nonz = 0;
+ 
+  for (i = 0; i < m; i++) {
+    for (j = 0; j < n; j++) {
+      if (A[i][j] != 0) {
+        val.push_back(A[i][j]);
+        ind.push_back(j);
+        nonz++;
+      }
+    }
+    div.push_back(nonz);
+  }
+    
+  int deviceId, numberOfSMs;
+  size_t threadsPerBlock, numberOfBlocks;
+  
+  cudaGetDevice(&deviceId);
+  cudaDeviceGetAttribute(&numberOfSMs, cudaDevAttrMultiProcessorCount, deviceId);
+
+  threadsPerBlock = 256;
+  numberOfBlocks = 32 * numberOfSMs;
+
+  double *x, *D, *y, *serialy;
+  int *P, *I;
+  
+  serialy = (double*)malloc(4096 * sizeof(double));
+  
+  cudaMallocManaged(&x, 4096*sizeof(double));
+  cudaMallocManaged(&y, 4096*sizeof(double));
+  cudaMallocManaged(&D, val.size()*sizeof(double));
+  cudaMallocManaged(&P, div.size()*sizeof(int));
+  cudaMallocManaged(&I, ind.size()*sizeof(int));
+  
+  for(i = 0; i < 4096; i++)
+  {
+    x[i] = i + 1;
+    y[i] = 0;
+  }
+  for (i = 0; i < val.size(); i++)
+    D[i] = val[i];
+  for (i = 0; i < div.size(); i++)
+    P[i] = div[i];
+  for (i = 0; i < ind.size(); i++)
+    I[i] = ind[i];
+    
+  cudaMemPrefetchAsync(x, 4096*sizeof(double), deviceId);
+  cudaMemPrefetchAsync(y, 4096*sizeof(double), deviceId); 
+  cudaMemPrefetchAsync(P, div.size()*sizeof(int), deviceId); 
+  cudaMemPrefetchAsync(I, ind.size()*sizeof(int), deviceId); 
+  cudaMemPrefetchAsync(D, val.size()*sizeof(double), deviceId); 
+  
+  sparsematrixvectormultiplier<<<numberOfBlocks, threadsPerBlock>>>(div.size(), P, I, D, x, y);
+  cudaDeviceSynchronize();
+  
+  serialmultiplier(A, x, serialy);
+  
+  if(validate(serialy, y))
+    printf("Correct\n");
+  else
+    printf("Wrong\n");
+
+  cudaFree(D);
+  cudaFree(P);
+  cudaFree(I);
+  cudaFree(x);
+  cudaFree(y);
+}

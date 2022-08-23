@@ -1,0 +1,84 @@
+#include <stdio.h>
+#include <math.h>
+
+__global__
+void prefixGPU(double *a, double *b, int n) {
+  
+  int index = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+  
+  for(int i = index; i < n; i += stride)
+  {
+    if(i == index)
+    {
+      b[i] = 0.0;
+      for(int j = 0; j <= i; j++)
+        b[i] += a[j];
+    }
+    else 
+    {
+      b[i] = b[i - stride];
+      for(int j = i - stride + 1; j <= i; j++)
+        b[i] += a[j];
+    }  
+  }
+}
+
+void prefixCPU(double *a, int n)
+{
+  for(int i = 1; i < n; i++)
+    a[i] += a[i - 1];
+  return;
+}
+
+bool validate(double *a, double *b, int n) {
+  bool ret = 1;
+  
+  for (int i = 0; i < n; i++) 
+    if (a[i] != b[i]) 
+      ret = 0;
+      
+  return ret;
+}
+
+int main(void) {
+
+  int n = 100000;
+  
+  int deviceId, numberOfSMs;
+  size_t threadsPerBlock, numberOfBlocks;
+    
+  cudaGetDevice(&deviceId);
+  cudaDeviceGetAttribute(&numberOfSMs, cudaDevAttrMultiProcessorCount, deviceId);
+  
+  threadsPerBlock = 256;
+  numberOfBlocks = 32 * numberOfSMs;
+  
+  int bytes = n * sizeof(double);
+  double *a, *b, *c;
+
+  cudaMallocManaged(&a, bytes);
+  cudaMallocManaged(&b, bytes);  
+  cudaMallocManaged(&c, bytes);  
+  
+  for(int i = 0; i < n; i++)
+  {
+    a[i] = c[i] = i + 1;
+    b[i] = 0;
+  }
+    
+  cudaMemPrefetchAsync(a, bytes, deviceId);
+  cudaMemPrefetchAsync(b, bytes, deviceId);
+  
+  prefixGPU<<<numberOfBlocks, threadsPerBlock>>>(a, b, n);
+  cudaDeviceSynchronize();
+  
+  prefixCPU(c, n);
+  
+  if(validate(b, c, n))
+    printf("Correct\n");
+  else
+    printf("Wrong\n");
+    
+  return 0;
+}

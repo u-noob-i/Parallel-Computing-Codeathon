@@ -1,0 +1,143 @@
+#include <iostream>
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <chrono>
+
+using namespace std::chrono;
+
+//masksize = 9
+
+__global__
+void conv3DGPU(double *a, double *b, double *mask, int n) {
+  
+  int index = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+
+  for(int i = index; i < n * n * n; i += stride)
+  {
+    double temp = 0;
+     
+    int t = i;
+    int r = t / (n * n);
+    t -= (r * n * n);
+    int c = t / n, h = t % n;
+    
+    int x = r - (9 / 2), y = c - (9 / 2), z = h - (9 / 2);
+    
+    for(int j = 0; j < 9; j++)
+      for(int k = 0; k < 9; k++)
+        for(int l = 0; l < 9; l++)
+          if(x + j >= 0 && x + j < n)
+            if(y + k >= 0 && y + k < n)
+              if(z + l >= 0 && z + l < n)
+                temp += a[(n * n * (x + j)) + (n * (y + k)) + (z + l)] * 
+                             mask[(9 * 9 * j) + (9 * k) + l];
+    b[(n * n * r) + (n * c) + h] = temp;
+  }  
+}
+
+void conv3DCPU(double *a, double *b, double *mask, int n)
+{
+  for(int i = 0; i < n * n * n; i++)
+  {
+    double temp = 0;
+     
+    int t = i;
+    int r = t / (n * n);
+    t -= (r * n * n);
+    int c = t / n, h = t % n;
+    
+    int x = r - (9 / 2), y = c - (9 / 2), z = h - (9 / 2);
+    
+    for(int j = 0; j < 9; j++)
+      for(int k = 0; k < 9; k++)
+        for(int l = 0; l < 9; l++)
+          if(x + j >= 0 && x + j < n)
+            if(y + k >= 0 && y + k < n)
+              if(z + l >= 0 && z + l < n)
+                temp += a[(n * n * (x + j)) + (n * (y + k)) + (z + l)] * 
+                             mask[(9 * 9 * j) + (9 * k) + l];
+    b[(n * n * r) + (n * c) + h] = temp;
+  }
+  return;
+}
+
+bool validate(double *a , double *b, int n)
+{
+  bool ret = 1;
+  for(int i = 0; i < n * n * n; i++)
+    if(a[i] != b[i])
+      ret = 0;
+  return ret;
+}
+
+int main(const int argc, const char** argv) {
+  
+  int deviceId, numberOfSMs;
+  size_t threadsPerBlock, numberOfBlocks;
+    
+  cudaGetDevice(&deviceId);
+  cudaDeviceGetAttribute(&numberOfSMs, cudaDevAttrMultiProcessorCount, deviceId);
+  
+  threadsPerBlock = 256;
+  numberOfBlocks = 32 * numberOfSMs;
+
+  int n = 100;
+
+  int bytes = n * sizeof(double), ms = 9 * sizeof(double);
+  double *a, *b, *c, *mask;
+
+  cudaMallocManaged(&a, bytes * bytes * bytes);
+  cudaMallocManaged(&b, bytes * bytes * bytes);
+  cudaMallocManaged(&c, bytes * bytes * bytes);
+  cudaMallocManaged(&mask, ms * ms * ms);
+  
+  double arr[n][n][n], m[9][9][9];
+  for (int i = 0; i < n; i++)
+    for(int j = 0; j < n; j++)
+      for(int k = 0; k < n; k++)
+        arr[i][j][k] = (i * n * n) + (j * n) + k;
+  
+  for (int i = 0; i < 9; i++)
+    for(int j = 0; j < 9; j++)
+      for(int k = 0; k < 9; k++)
+        m[i][j][k] = 1;
+  
+  //Implementing 3D arrays using 1D arrays
+  for(int i = 0; i < n; i++)
+    for(int j = 0; j < n; j++)
+      for(int k = 0; k < n; k++)
+        a[(i * n * n) + (j * n) + k] = b[(i * n * n) + (j * n) + k] = arr[i][j][k];
+
+  for(int i = 0; i < 9; i++)
+    for(int j = 0; j < 9; j++)
+      for(int k = 0; k < 9; k++)
+        mask[(i * 9 * 9) + (j * 9) + k] = m[i][j][k];
+    
+  cudaMemPrefetchAsync(a, bytes * bytes * bytes, deviceId);
+  cudaMemPrefetchAsync(b, bytes * bytes * bytes, deviceId);
+  cudaMemPrefetchAsync(mask, ms * ms * ms, deviceId);
+  
+  conv3DGPU<<<numberOfBlocks, threadsPerBlock>>>(a, b, mask, n);
+  cudaDeviceSynchronize();
+  
+  auto start = high_resolution_clock::now();
+
+  conv3DCPU(a, c, mask, n); 
+  
+  auto stop = high_resolution_clock::now();
+  auto t = duration_cast<nanoseconds>(stop - start);
+ 
+  std::cout << "Time taken by CPU: " << t.count() << " nanoseconds" << "\n";
+
+  if(validate(b, c, n))
+    printf("Correct\n");
+  else
+    printf("Wrong\n");
+
+  cudaFree(a);
+  cudaFree(b);
+  cudaFree(c);
+  cudaFree(mask);
+}

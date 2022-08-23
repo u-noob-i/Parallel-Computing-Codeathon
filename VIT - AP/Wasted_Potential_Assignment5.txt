@@ -1,0 +1,104 @@
+#include <math.h>
+#include <stdio.h>
+
+
+void initWithCPU(int num, int *a, int N)
+{
+  for(int i = 0; i < N; ++i)
+  {
+    a[i] = num+i;
+  }
+}
+
+void insertionSortCPU(int arr[], int n)
+{
+    int i, key, j;
+    for (i = 1; i < n; i++) {
+        key = arr[i];
+        j = i - 1;
+ 
+        while (j >= 0 && arr[j] > key) {
+            arr[j + 1] = arr[j];
+            j = j - 1;
+        }
+        arr[j + 1] = key;
+    }
+}
+
+__global__ void initWithGPU(int num, int *a, int n)
+{
+  int index = threadIdx.x + blockIdx.x * blockDim.x;
+  int stride = blockDim.x * gridDim.x;
+  for(int i = index; i < n; i += stride)
+  {
+    a[i]=num+i;
+  }
+}
+
+__global__ void insertionSortGPU(int *a, int n)
+{
+    int i, key, j;
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    int stride = blockDim.x * gridDim.x;
+  
+    for (i = index; i < n; i+= stride) {
+        key = a[i];
+        j = i - 1;
+        
+        while (j >= 0 && a[j] > key) {
+            a[j + 1] = a[j];
+            j = j - 1;
+        }
+        a[j + 1] = key;
+    }
+}
+ 
+void printArray(int arr[], int n)
+{
+    int i;
+    for (i = 0; i < n; i++)
+        printf("%d ", arr[i]);
+    printf("\n");
+}
+
+bool check(int arr[], int n){
+     bool check = true;
+     for(int i=0; i<n-1 ; i++){ 
+         if(arr[i]>arr[i+1])
+           check = false;
+     }
+     return check;
+}
+
+int main()
+{    
+    int deviceId, numberOfSMs;
+    size_t threadsPerBlock, numberOfBlocks;
+    cudaGetDevice(&deviceId);
+    cudaDeviceGetAttribute(&numberOfSMs, cudaDevAttrMultiProcessorCount, deviceId);
+  
+    threadsPerBlock = 256;
+    numberOfBlocks = 32 * numberOfSMs;
+
+    int n = 100000;
+    int size = n * sizeof(double);
+
+    int *a;
+    cudaMallocManaged(&a, size);
+    
+    cudaMemPrefetchAsync(a, size, deviceId);
+    
+    initWithGPU<<<numberOfBlocks,threadsPerBlock>>>(3.0, a, n);
+    cudaError_t asyncErr;
+    insertionSortGPU<<<numberOfBlocks, threadsPerBlock>>>(a, n);
+    
+    asyncErr = cudaDeviceSynchronize();
+    if(asyncErr != cudaSuccess) printf("Error: %s\n", cudaGetErrorString(asyncErr));
+    
+    if(check(a, n))
+        printf("\narray is in ascending order\n");
+
+    cudaFree(a);
+    
+    return 0;
+}
